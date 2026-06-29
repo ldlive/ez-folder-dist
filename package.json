@@ -1,0 +1,40 @@
+{
+  "name": "ez-folder-peer",
+  "version": "0.1.0",
+  "description": "EZ-Folder 헤드리스 원격 peer (Linux) — 브라우저 없이 P2P 호스팅. 개발중.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "bin": {
+    "ez-folder-peer": "bin/ez-folder-peer.mjs"
+  },
+  "files": [
+    "dist/peer.mjs",
+    "bin/",
+    "scripts/",
+    "lib/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs"
+  },
+  "dependencies": {
+    "centrifuge": "^5.7.0",
+    "node-datachannel": "^0.30.0",
+    "ws": "^8.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ldlive/ez-folder-dist.git"
+  },
+  "homepage": "https://github.com/ldlive/ez-folder-dist"
+}
