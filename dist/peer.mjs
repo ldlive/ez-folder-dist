@@ -386,70 +386,16 @@ function fsPathUnder(child, parent) {
   if (c === p) return true;
   return c.startsWith(p + "/");
 }
-var ALLOW = [
-  // ── liveness/auth probe (연결상태 표시줄 heartbeat) ──
-  // 데스크톱 `/d` 는 devmode 앱 전체가 전역 daemon() 을 P2P 로 태운다. 그 연결상태 store 가
-  // 2.5~15s 마다 connectionStatus() → GET /v1/readyz 로 살아있음+토큰유효를 판정한다.
-  // 이게 화이트리스트에 없으면 거부(forbidden)→unreachable→footer "데몬 연결중" 영구 표시(INC-0140).
-  { method: "GET", prefix: "/v1/readyz" },
-  { method: "GET", prefix: "/v1/healthz" },
-  // ── 관측성: 원격 클라이언트 로그를 PC frontend.log 로(원격 세션 디버깅). append-only 무해 ──
-  { method: "POST", prefix: "/v1/logs/sink" },
-  // ── 읽기: 라이선스 상태(LICENSE_GATE 표시 판정용 read-only; activate 등 변이는 차단 유지) ──
-  { method: "GET", prefix: "/v1/license/state" },
-  // ── 읽기: 파일시스템 탐색/조회 ──
-  { method: "GET", prefix: "/v1/fs/drives" },
-  { method: "GET", prefix: "/v1/fs/quick-access" },
-  { method: "POST", prefix: "/v1/fs/browse" },
-  { method: "POST", prefix: "/v1/fs/scan" },
-  { method: "POST", prefix: "/v1/fs/stat" },
-  { method: "POST", prefix: "/v1/fs/exists" },
-  { method: "POST", prefix: "/v1/fs/read-text" },
-  { method: "POST", prefix: "/v1/fs/read-bytes" },
-  { method: "POST", prefix: "/v1/fs/zone-info" },
-  // ── 읽기: 검색 ──
-  { method: "POST", prefix: "/v1/search/keyword" },
-  { method: "POST", prefix: "/v1/search/smart" },
-  // ── 읽기: DB 문서/엑셀/청크 조회 (GET 만 — upsert/delete 는 별도) ──
-  { method: "GET", prefix: "/v1/db/documents" },
-  // 목록/상세(:id)/search/children/by-folder/...
-  { method: "GET", prefix: "/v1/db/excel-rows" },
-  // excel-rows + /sheets
-  { method: "POST", prefix: "/v1/db/chunks/by-ids" },
-  { method: "POST", prefix: "/v1/db/chunks/expand-parents" },
-  // ── 읽기: 파일명 검색(Everything 식 fileScan) + 트리 브라우징 (전부 GET, 변이 아님) ──
-  { method: "GET", prefix: "/v1/file-scan/status" },
-  { method: "GET", prefix: "/v1/file-scan/search" },
-  { method: "GET", prefix: "/v1/file-scan/files" },
-  { method: "GET", prefix: "/v1/file-scan/dirs" },
-  { method: "GET", prefix: "/v1/file-scan/skeleton" },
-  { method: "GET", prefix: "/v1/file-scan/search-dirs" },
-  { method: "GET", prefix: "/v1/file-scan/dir-files" },
-  { method: "GET", prefix: "/v1/file-scan/dir-files-batch" },
-  // ── 읽기: 미리보기 ──
-  { method: "GET", prefix: "/v1/preview" },
-  { method: "POST", prefix: "/v1/preview" },
-  // ── 읽기: 문서 파싱/추출 (미리보기 텍스트) ──
-  { method: "POST", prefix: "/v1/docs/parse" },
-  { method: "POST", prefix: "/v1/docs/extract" },
-  // ── 읽기: 인덱싱 상태(표시용, 변이 아님) ──
-  { method: "GET", prefix: "/v1/indexing/status" },
-  // ── 읽기: 설정 조회 (GET 만 — 변경은 차단) ──
-  { method: "GET", prefix: "/v1/settings" },
-  // settings + file-type-extensions + supported-extensions (GET)
-  // ── 읽기: 워처 폴더 목록 (GET 만 — folders:add/remove POST 는 차단) ──
-  { method: "GET", prefix: "/v1/watcher/folders" },
-  // ── 쓰기(본인 계정): 파일 쓰기/이름변경 ──
-  { method: "POST", prefix: "/v1/fs/write-text" },
-  { method: "POST", prefix: "/v1/fs/write-bytes" },
-  { method: "POST", prefix: "/v1/fs/rename" },
-  // ── 쓰기(본인 계정): 문서 삭제 (인덱싱 유발 아님 — 정리) ──
-  { method: "POST", prefix: "/v1/db/documents/delete" },
-  { method: "POST", prefix: "/v1/db/documents/delete-files" },
-  // ── 쓰기(본인 계정): 파일 공유 발급/해지. 막으려면 아래 3줄 제거(ADR-0158). ──
-  { method: "GET", prefix: "/v1/share/list" },
-  { method: "POST", prefix: "/v1/share/create" },
-  { method: "POST", prefix: "/v1/share/revoke" }
+var DENY = [
+  // ── 원격에서 호스트 OS "실행"(launch) 차단 — 파일/프로그램을 호스트에서 띄우는 op. ──
+  // 원격 사용자가 내 PC 에서 임의 파일·exe 를 실행하거나 외부 셸/탐색기를 못 띄우게 한다.
+  // ※ 임베드 터미널(Ctrl+`, `term-open`/`/v1/terminal/ws`)은 **별개** — 여기서 안 막는다(설정 토글로 제어).
+  { method: "POST", prefix: "/v1/fs/open-path" },
+  // OS 기본앱으로 열기(=실행)
+  { method: "POST", prefix: "/v1/fs/open-terminal" },
+  // 외부 터미널 창 띄우기
+  { method: "POST", prefix: "/v1/fs/reveal" }
+  // 탐색기에 항목 표시(프로세스 launch)
 ];
 var BACKPRESSURE_LIMIT = 4 * 1024 * 1024;
 function defaultToken() {
@@ -469,7 +415,7 @@ var PeerBridge = class {
   mkToken;
   chunkLen;
   log;
-  allow;
+  deny;
   onSessionScope;
   terminalEnabled;
   terminalFactory;
@@ -482,7 +428,7 @@ var PeerBridge = class {
     this.mkToken = opts.randomToken ?? defaultToken;
     this.chunkLen = opts.chunkLen ?? CHUNK_BYTES;
     this.log = opts.log ?? noopRemoteLog;
-    this.allow = opts.allowRules ?? ALLOW;
+    this.deny = opts.denyRules ?? DENY;
     this.onSessionScope = opts.onSessionScope;
     this.terminalEnabled = opts.terminalEnabled ?? (() => true);
     this.terminalFactory = opts.terminalFactory ?? defaultTerminalFactory;
@@ -570,20 +516,16 @@ var PeerBridge = class {
     return normalized;
   }
   /**
-   * 화이트리스트 매칭 — method + **경계(boundary)** 일치. **정규화된 경로**로만 매칭한다.
+   * 블랙리스트 매칭(ADR-0248) — 계정 owner 세션은 **기본 허용**, `this.deny` 에 명시된 op 만 거부.
    *
-   * `clean.startsWith(prefix)` 단순 prefix 매칭은 `/v1/fs/drives` 허용이 `/v1/fs/drives-evil` 을,
-   * 혹은 짧은 prefix 가 더 긴 차단 경로를 인가하는 누수를 낸다. 경로 세그먼트 경계로만 매칭:
-   *   path === prefix  또는  path 가 `prefix + '/'` 로 시작.
-   * (prefix 는 슬래시 없는 정확 경로로 등록 — `folders:add` 처럼 콜론 액션 세그먼트도 method 가 다르면
-   *  애초에 매칭되지 않는다.)
-   *
-   * canonicalPath(path) 가 null(위험/비정상 경로)이면 즉시 거부.
+   * 항상 적용되는 가드: `canonicalPath(path)` 가 null(`..`/traversal/비정상 경로)이면 즉시 거부 —
+   * 블랙리스트가 비어도 경로 우회 RCE 는 막힌다. 매칭은 method + 세그먼트 경계(`path === prefix`
+   * 또는 `prefix + '/'` 시작)로만 — 짧은 prefix 가 무관한 더 긴 경로를 잘못 차단하지 않게.
    */
   allowed(method, path) {
     const clean = this.canonicalPath(path);
     if (clean === null) return false;
-    return this.allow.some(
+    return !this.deny.some(
       (a) => a.method === method && (clean === a.prefix || clean.startsWith(a.prefix + "/"))
     );
   }
@@ -963,6 +905,20 @@ var DEFAULT_RTC = {
 };
 var defaultFactory = (config) => new RTCPeerConnection(config);
 var BUFFERED_LOW = 1 * 1024 * 1024;
+function waitIceComplete(pc, timeoutMs = 3e3) {
+  if (pc.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      pc.removeEventListener?.("icegatheringstatechange", check);
+      resolve();
+    };
+    const check = () => {
+      if (pc.iceGatheringState === "complete") done();
+    };
+    pc.addEventListener?.("icegatheringstatechange", check);
+    setTimeout(done, timeoutMs);
+  });
+}
 function wrapChannel(dc, pc, session) {
   const msgCbs = [];
   const closeCbs = [];
@@ -1085,6 +1041,13 @@ function startPeer(signaling, onConnection, opts = {}) {
       const s = pc.connectionState;
       log2.info("ice-conn-state", { session, conn: s, ice: pc.iceConnectionState });
       if (s === "failed") log2.error("peer-conn-failed", { session, ice: pc.iceConnectionState });
+      if (s === "failed" || s === "closed") {
+        if (conns.get(session) === pc) conns.delete(session);
+        try {
+          pc.close();
+        } catch {
+        }
+      }
     });
     pc.addEventListener?.("iceconnectionstatechange", () => {
       log2.info("ice-state", { session, ice: pc.iceConnectionState });
@@ -1121,6 +1084,7 @@ function startPeer(signaling, onConnection, opts = {}) {
       await pc.setRemoteDescription(sdp);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      await waitIceComplete(pc);
       await signaling.postSignal("answer", pc.localDescription, session);
       log2.info("peer-answer-sent", { session });
     } catch (e) {
@@ -1162,6 +1126,7 @@ if (!G.RTCDataChannel && P.RTCDataChannel) G.RTCDataChannel = P.RTCDataChannel;
 var SERVER = (process.env.EZ_REMOTE_SERVER || "https://ez-folder.bbo-odd.com").replace(/\/$/, "");
 var DAEMON_BASE = (process.env.EZFD_DAEMON_BASE || "http://127.0.0.1:59100").replace(/\/$/, "");
 var DAEMON_TOKEN = process.env.EZFD_DAEMON_TOKEN || "";
+var TERMINAL_ENABLED = (process.env.EZ_REMOTE_TERMINAL || "true").toLowerCase() !== "false";
 var log = consoleRemoteLog();
 function daemonFetch(input, init) {
   const url = input.startsWith("/") ? DAEMON_BASE + input : input;
@@ -1207,7 +1172,13 @@ async function main() {
     role: "peer",
     secret: reg.registrationSecret
   });
-  const bridge = new PeerBridge({ log, fetchImpl: daemonFetch, terminalEnabled: () => false });
+  const bridge = new PeerBridge({
+    log,
+    fetchImpl: daemonFetch,
+    terminalEnabled: () => TERMINAL_ENABLED,
+    terminalFactory: (opts) => new LocalWsTransport(DAEMON_BASE, DAEMON_TOKEN, opts)
+  });
+  log.info("terminal", { enabled: TERMINAL_ENABLED });
   const handle = startPeer(signaling, (ch) => bridge.attach(ch), { log });
   const desktopUrl = `${SERVER}/d/${reg.slug}`;
   const mobileUrl = `${SERVER}/m/${reg.slug}`;
