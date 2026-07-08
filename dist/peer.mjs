@@ -56839,6 +56839,15 @@ var DaemonClient = class _DaemonClient {
       return "unreachable";
     }
   }
+  /** 데몬(=제품) 버전 — /v1/healthz.version (정본 Cargo.toml, make ver up 동기화). 실패 시 null. */
+  async daemonVersion() {
+    try {
+      const r = await this.get("/v1/healthz");
+      return r.version ?? null;
+    } catch {
+      return null;
+    }
+  }
   async parse(body) {
     return this.post("/v1/docs/parse", body);
   }
