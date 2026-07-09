@@ -56131,6 +56131,8 @@ var SignalingClient = class _SignalingClient {
   connected = false;
   /** nextMessages() 대기자 — publication 도착 시 즉시 깨운다(고정 폴링 지연 제거). */
   waiters = [];
+  /** 마지막 /token 응답의 TURN 자격 — RemoteTransport 가 PC 생성 시 iceServers 로 병합. */
+  turn = null;
   constructor(opts) {
     this.server = opts.server.replace(/\/$/, "");
     this.base = this.server + "/api/v1/remote";
@@ -56193,7 +56195,15 @@ var SignalingClient = class _SignalingClient {
     });
     const env = await res.json();
     if (!env.ok || !env.data) throw new Error(env.error?.message ?? "token failed");
+    this.turn = env.data.turn ?? null;
     return env.data;
+  }
+  /**
+   * 마지막 토큰 응답의 TURN 자격 → RTCIceServer[] (미발급이면 []).
+   * RemoteTransport 가 PC 생성 직전에 호출해 STUN 뒤에 병합 — 직결 실패 시에만 relay 폴백.
+   */
+  turnServers() {
+    return this.turn ? [{ urls: this.turn.urls, username: this.turn.username, credential: this.turn.credential }] : [];
   }
   /** 최초 1회 Centrifugo 연결 + 채널 구독. 이후 호출은 같은 promise 재사용. */
   ensureConnected() {
@@ -56694,8 +56704,10 @@ var SSE_KNOWN_TOPICS = [
   // chatStore.subscribeEvents 가 이벤트를 영영 못 받는다(다른 창/브라우저 뱃지 미갱신 버그).
   "chat:message",
   // 새 메시지 — 활성 방 append / 비활성 방 unread 갱신
-  "chat:room"
+  "chat:room",
   // 방 메타 변경(읽음·이름·삭제·enabled) — 방 목록 재조회
+  "remote-edit:changed"
+  // 원격 편집 스테이지 사본 저장 감지 — 업로드 제안/뱃지 (PLAN-remote-edit-sync)
 ];
 var DaemonClient = class _DaemonClient {
   static instance = null;
@@ -57260,6 +57272,32 @@ var DaemonClient = class _DaemonClient {
     const params = new URLSearchParams({ slug });
     return this.post(`/v1/shared-cache/purge?${params.toString()}`, {});
   }
+  // ---- /v1/remote-edit (원격 편집 세션, PLAN-remote-edit-sync — 로컬 데몬 전용) ----
+  /**
+   * 검증된 shared-cache 사본을 편집 스테이지(원본 파일명)로 복사하고 세션을 upsert.
+   * 캐시에 정확 (mtime,size) 사본이 없으면 409 cache_miss — 호출 전 materialize 필수.
+   */
+  async remoteEditStage(req) {
+    return this.post("/v1/remote-edit/stage", req);
+  }
+  /** 원격 편집 세션 목록(최근 열람순) — 뱃지/디버그용. */
+  async remoteEditSessions() {
+    return this.get("/v1/remote-edit/sessions");
+  }
+  /** 세션 + 스테이지 사본 정리. 없는 id 면 ok=false. */
+  async remoteEditSessionDelete(id) {
+    return this.del(`/v1/remote-edit/sessions/${encodeURIComponent(id)}`);
+  }
+  /**
+   * 업로드 완료 반영 — dirty 해제 + (덮어쓰기면) baseline 을 새 원격 (mtime,size) 로.
+   * baseline 생략 = "다른 이름으로 저장"(원본 원격 파일은 그대로 — baseline 보존).
+   */
+  async remoteEditUploaded(id, baseline) {
+    return this.post(
+      `/v1/remote-edit/sessions/${encodeURIComponent(id)}/uploaded`,
+      baseline ?? {}
+    );
+  }
   /**
    * 폴더에서 PowerShell 열기 (우클릭 '시스템명령'). admin=true 면 UAC 승격.
    * Windows 전용 — daemon 이 그 PC 에서 실행한다(WebView2/원격 런타임도 동일 경로).
@@ -57278,6 +57316,15 @@ var DaemonClient = class _DaemonClient {
   /** 탐색기를 열어 항목을 선택 표시(reveal). daemon 이 그 PC 에서 실행. 로컬 전용. Windows. */
   async fsReveal(path) {
     return this.post("/v1/fs/reveal", { path });
+  }
+  /** 클라우드 자리표시자 가져오기(hydration) 시작 — 멱등, 즉시 상태 스냅샷. 로컬 전용. */
+  async fsHydrate(path) {
+    return this.post("/v1/fs/hydrate", { path });
+  }
+  /** hydration 진행률 폴링 — 시작한 적 없으면 state='none'. */
+  async fsHydrateStatus(path) {
+    const params = new URLSearchParams({ path });
+    return this.get(`/v1/fs/hydrate?${params.toString()}`);
   }
   /**
    * 선택 파일/폴더를 OS 클립보드에 CF_HDROP 으로 올린다 — 탐색기·메신저에 Ctrl+V 로 실제 파일 복사.
@@ -57444,6 +57491,12 @@ var DaemonClient = class _DaemonClient {
       qs.append("order", sort.order);
     }
     return this.get(`/v1/file-scan/files?${qs.toString()}`);
+  }
+  /** 최근 오픈 파일 전용 — 데몬이 작은 file_opens 를 드라이빙(INNER JOIN)해 조회일 내림차순으로
+   *  반환한다. list_all(sort=opened) 의 files 전체 LEFT JOIN 스캔을 피해 인덱스 크기와 무관하게 빠르다.
+   *  이미 연 파일만 오므로 호출측의 opened_at>0 필터 불요. */
+  async fileScanRecentOpened(limit = 30) {
+    return this.get(`/v1/file-scan/recent-opened?limit=${limit}`);
   }
   /** 전체경로 검색 — 공백 AND (3자↑ FTS5 MATCH, 2자 LIKE 폴백). offset 페이징.
    *  roots 지정 시 그 폴더들 아래만 (체크 해제 폴더 즉시 제외, ADR-0119).
@@ -60287,6 +60340,12 @@ var DEFAULT_RTC = {
   iceCandidatePoolSize: 4
 };
 var defaultFactory = (config) => new RTCPeerConnection(config);
+function rtcConfig(signaling, override) {
+  if (override) return override;
+  const turn = signaling.turnServers?.() ?? [];
+  if (turn.length === 0) return DEFAULT_RTC;
+  return { ...DEFAULT_RTC, iceServers: [...DEFAULT_RTC.iceServers ?? [], ...turn] };
+}
 var BUFFERED_LOW = 1 * 1024 * 1024;
 function waitIceComplete(pc, timeoutMs = 3e3) {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
@@ -60422,7 +60481,7 @@ function startPeer(signaling, onConnection, opts = {}) {
   })();
   async function handleOffer(session, sdp) {
     log2.info("peer-offer-recv", { session });
-    const pc = factory(opts.pcConfig ?? DEFAULT_RTC);
+    const pc = factory(rtcConfig(signaling, opts.pcConfig));
     conns.set(session, pc);
     let localSrflx = 0;
     let localHost = 0;
