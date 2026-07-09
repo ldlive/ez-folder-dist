@@ -56142,13 +56142,14 @@ var SignalingClient = class _SignalingClient {
     this.secret = opts.secret;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
-  /** 정적: 기기 등록 → {slug, registrationSecret}. (매니저 RemotePeerHost / 앱 피어가 호출) */
-  static async register(server, deviceId, fetchImpl = globalThis.fetch.bind(globalThis)) {
+  /** 정적: 기기 등록 → {slug, registrationSecret}. (매니저 RemotePeerHost / 앱 피어가 호출)
+   *  rotate=true 면 기존 slug 를 버리고 새 slug 발급(ADR-0292 — 접속 주소 변경). 기본은 slug 유지. */
+  static async register(server, deviceId, fetchImpl = globalThis.fetch.bind(globalThis), rotate = false) {
     const base = server.replace(/\/$/, "") + "/api/v1/remote";
     const res = await fetchImpl(`${base}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deviceId })
+      body: JSON.stringify(rotate ? { deviceId, rotate: true } : { deviceId })
     });
     const env = await res.json();
     if (!env.ok || !env.data) throw new Error(env.error?.message ?? "register failed");
